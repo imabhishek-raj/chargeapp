@@ -1,5 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, addDoc, getDocs } from "firebase/firestore";
+// Added missing Firebase Authentication SDK packages
+import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from "firebase/auth";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -13,8 +15,9 @@ const firebaseConfig = {
 // Initialize the Firebase app instance
 const app = initializeApp(firebaseConfig);
 
-// Initialize Cloud Firestore database services
+// Initialize Engines
 export const db = getFirestore(app);
+export const auth = getAuth(app); // Active Authentication Module
 
-// Export standard database methods for clean imports later
-export { collection, addDoc, getDocs };
+// Export standard Firebase methods for clean imports across components
+export { collection, addDoc, getDocs, RecaptchaVerifier, signInWithPhoneNumber };
