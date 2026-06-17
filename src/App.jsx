@@ -17,38 +17,35 @@ export default function App() {
   const [routeInfo, setRouteInfo] = useState(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [mapError, setMapError] = useState(false);
+  const [userLocation, setUserLocation] = useState(null);
 
   const directionsServiceRef = useRef(null);
   const directionsRendererRef = useRef(null);
   const markersRef = useRef([]);
+  const userMarkerRef = useRef(null);
+  const watchIdRef = useRef(null);
 
-  // Handle mobile layout shifts dynamically
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 1. Dynamic Script Loader Lifecycle to completely prevent the "undefined" crash
+  // 1. Script Loader Engine
   useEffect(() => {
-    // If it's already attached globally, skip straight to initialization
     if (window.google && window.google.maps) {
       setIsSdkLoaded(true);
       return;
     }
-
-    // Check if another instance of the script tag exists to avoid duplicates
     const existingScript = document.getElementById('google-maps-script');
     if (existingScript) {
       existingScript.addEventListener('load', () => setIsSdkLoaded(true));
       return;
     }
 
-    // Pull your API key safely from AWS environment variable configuration
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY; 
-    
     if (!apiKey) {
-      console.error("Missing VITE_GOOGLE_MAPS_API_KEY environment configuration.");
+      console.error("Missing VITE_GOOGLE_MAPS_API_KEY initialization configuration.");
       setMapError(true);
       return;
     }
@@ -58,19 +55,12 @@ export default function App() {
     script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
     script.async = true;
     script.defer = true;
-    
-    script.addEventListener('load', () => {
-      setIsSdkLoaded(true);
-    });
-
-    script.addEventListener('error', () => {
-      setMapError(true);
-    });
-
+    script.addEventListener('load', () => setIsSdkLoaded(true));
+    script.addEventListener('error', () => setMapError(true));
     document.head.appendChild(script);
   }, []);
 
-  // 2. Initialize Map Canvas once SDK is confirmed loaded
+  // 2. Map Canvas Mounting Lifecycle
   useEffect(() => {
     if (!isSdkLoaded || !mapRef.current) return;
 
@@ -100,12 +90,60 @@ export default function App() {
 
       setMap(instance);
     } catch (err) {
-      console.error("Error initializing Google Maps layout:", err);
+      console.error("Initialization fault:", err);
       setMapError(true);
     }
   }, [isSdkLoaded]);
 
-  // 3. Render Custom Map Anchors/Markers
+  // 3. Automated Geolocation Watch Pipeline & Custom User Anchor Dot
+  useEffect(() => {
+    if (!map || !isSdkLoaded) return;
+
+    if (navigator.geolocation) {
+      // Actively stream precise user coordinate telemetry shifts
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (position) => {
+          const currentCoords = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          };
+          
+          setUserLocation(currentCoords);
+
+          // Render or dynamically shift the glowing user position anchor dot
+          if (userMarkerRef.current) {
+            userMarkerRef.current.setPosition(currentCoords);
+          } else {
+            userMarkerRef.current = new window.google.maps.Marker({
+              position: currentCoords,
+              map: map,
+              title: "Your Location",
+              icon: {
+                path: window.google.maps.SymbolPath.CIRCLE,
+                scale: 8,
+                fillColor: "#58a6ff", // Neon tracking blue
+                fillOpacity: 1,
+                strokeColor: "#ffffff",
+                strokeWeight: 2,
+              }
+            });
+            
+            // Auto-center camera onto user position on initial successful load
+            map.panTo(currentCoords);
+            map.setZoom(13);
+          }
+        },
+        (error) => console.warn("Live geolocation stream trace warning:", error),
+        { enableHighAccuracy: true, maximumAge: 1000 }
+      );
+    }
+
+    return () => {
+      if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+    };
+  }, [map, isSdkLoaded]);
+
+  // 4. Render Station Pinpoints
   useEffect(() => {
     if (!map || !isSdkLoaded) return;
 
@@ -140,39 +178,15 @@ export default function App() {
     }
   };
 
-  // 4. In-App Direct Routing Engine
+  // 5. Calculate In-App Navigation Routes
   const calculateInAppRoute = (station) => {
-    if (!directionsServiceRef.current || !directionsRendererRef.current) {
-      alert("The routing system is still initializing. Please give it a brief moment.");
-      return;
-    }
+    if (!directionsServiceRef.current || !directionsRendererRef.current) return;
 
-    const fallbackPoint = { lat: 28.5939, lng: 77.2290 }; // Central Delhi backup point
+    const startPoint = userLocation || { lat: 28.5939, lng: 77.2290 }; // Use live coordinate dot, fallback to backup center if blocked
 
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const originPoint = {
-            lat: position.coords.latitude,
-            lng: position.coords.longitude
-          };
-          requestGoogleRoute(originPoint, station);
-        },
-        (error) => {
-          console.warn("Location permission unavailable. Defaulting to system fallback view.", error);
-          requestGoogleRoute(fallbackPoint, station);
-        },
-        { timeout: 8000 }
-      );
-    } else {
-      requestGoogleRoute(fallbackPoint, station);
-    }
-  };
-
-  const requestGoogleRoute = (origin, station) => {
     directionsServiceRef.current.route(
       {
-        origin: origin,
+        origin: startPoint,
         destination: { lat: station.lat, lng: station.lng },
         travelMode: window.google.maps.TravelMode.DRIVING,
       },
@@ -185,16 +199,26 @@ export default function App() {
             duration: leg.duration.text
           });
         } else {
-          alert('Route rendering mismatch: ' + status);
+          alert('Route routing failed: ' + status);
         }
       }
     );
   };
 
+  // Explicit Camera Refocus Sweep Command Triggered by Floating Target Button
+  const handleRecenter = () => {
+    if (!map || !userLocation) {
+      alert("GPS coordinates not acquired yet. Please check your browser's location settings.");
+      return;
+    }
+    map.panTo(userLocation);
+    map.setZoom(15);
+  };
+
   return (
-    <div style={{ display: 'flex', flexDirection: isMobile ? 'column-reverse' : 'row', height: '100vh', width: '100vw' }}>
+    <div style={{ display: 'flex', flexDirection: isMobile ? 'column-reverse' : 'row', height: '100vh', width: '100vw', position: 'relative' }}>
       
-      {/* Sidebar UI */}
+      {/* Sidebar Layout */}
       <div className="sidebar" style={{ width: isMobile ? '100%' : '360px', height: isMobile ? '45vh' : '100%' }}>
         <div style={{ padding: '20px 16px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="branding-header">chargeapp.in</h1>
@@ -245,18 +269,54 @@ export default function App() {
         )}
       </div>
 
-      {/* Map Content Space */}
+      {/* Main Map Box Context Area */}
       {mapError ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e', backgroundColor: '#0d1117', padding: '20px', textAlign: 'center' }}>
-          <div>
-            <h3>Map Layout Integration Halted</h3>
-            <p>Please confirm your domain settings inside the Google Cloud Console credentials parameters.</p>
-          </div>
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e', backgroundColor: '#0d1117' }}>
+          <h3>Map Configuration Error</h3>
         </div>
       ) : (
-        <div ref={mapRef} style={{ flex: 1, height: '100%', width: isMobile ? '100%' : 'auto', backgroundColor: '#0d1117' }}>
+        <div style={{ flex: 1, height: '100%', width: isMobile ? '100%' : 'auto', position: 'relative', backgroundColor: '#0d1117' }}>
+          <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
+          
+          {/* Floating Aesthetic Target Recenter Overlay UI Controls Button */}
+          {isSdkLoaded && (
+            <button 
+              onClick={handleRecenter}
+              className="recenter-btn"
+              style={{
+                position: 'absolute',
+                bottom: isMobile ? '24px' : '32px',
+                right: '24px',
+                width: '52px',
+                height: '52px',
+                borderRadius: '50%',
+                backgroundColor: '#21262d',
+                border: '1px solid #30363d',
+                color: '#58a6ff',
+                fontSize: '1.6rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                zIndex: 99,
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'scale(1.05)';
+                e.currentTarget.style.borderColor = '#58a6ff';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'scale(1)';
+                e.currentTarget.style.borderColor = '#30363d';
+              }}
+            >
+              🎯
+            </button>
+          )}
+
           {!isSdkLoaded && (
-            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#58a6ff', fontSize: '1.1rem', fontWeight: '600' }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#58a6ff', fontSize: '1.1rem', fontWeight: '600' }}>
               connecting to google maps...
             </div>
           )}
