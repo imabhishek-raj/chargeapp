@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './App.css';
 
-// Mock Dataset for Delhi-NCR EV Stations
 const MOCK_STATIONS = [
   { id: 1, name: 'Kashmere Gate EV Station', address: 'Near Metro Gate No. 1, Delhi', type: 'Fast CCS2', lat: 28.6675, lng: 77.2282 },
   { id: 2, name: 'Connaught Place Hub', address: 'Block E, Radial Road 2, New Delhi', type: 'Fast CCS2 & AC Type 2', lat: 28.6304, lng: 77.2177 },
@@ -12,69 +11,104 @@ const MOCK_STATIONS = [
 export default function App() {
   const mapRef = useRef(null);
   const [map, setMap] = useState(null);
+  const [isSdkLoaded, setIsSdkLoaded] = useState(false);
   const [stations] = useState(MOCK_STATIONS);
   const [selectedStation, setSelectedStation] = useState(null);
   const [routeInfo, setRouteInfo] = useState(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [mapError, setMapError] = useState(false);
 
-  // Core References for Google's Drawing Engines
   const directionsServiceRef = useRef(null);
   const directionsRendererRef = useRef(null);
   const markersRef = useRef([]);
 
-  // Monitor screen size adjustments dynamically
+  // Handle mobile layout shifts dynamically
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Initialize Map Engine
+  // 1. Dynamic Script Loader Lifecycle to completely prevent the "undefined" crash
   useEffect(() => {
-    if (!mapRef.current) return;
+    // If it's already attached globally, skip straight to initialization
+    if (window.google && window.google.maps) {
+      setIsSdkLoaded(true);
+      return;
+    }
 
-    // Custom Map Configuration Style (Dark Mode Aesthetic)
-    const darkMapStyle = [
-      { elementType: "geometry", stylers: [{ color: "#21262d" }] },
-      { elementType: "labels.text.stroke", stylers: [{ color: "#21262d" }] },
-      { elementType: "labels.text.fill", stylers: [{ color: "#8b949e" }] },
-      { featureType: "road", elementType: "geometry", stylers: [{ color: "#30363d" }] },
-      { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#161b22" }] },
-      { featureType: "water", elementType: "geometry", stylers: [{ color: "#0d1117" }] }
-    ];
+    // Check if another instance of the script tag exists to avoid duplicates
+    const existingScript = document.getElementById('google-maps-script');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => setIsSdkLoaded(true));
+      return;
+    }
 
-    const instance = new window.google.maps.Map(mapRef.current, {
-      center: { lat: 28.6139, lng: 77.2090 }, // Central Delhi coordinates
-      zoom: 11,
-      styles: darkMapStyle,
-      // Completely wipes native mobile/desktop maps controls
-      disableDefaultUI: true,
-      zoomControl: true,
-      streetViewControl: false,
-      mapTypeControl: false,
-      fullscreenControl: false
+    // Pull your API key safely from AWS environment variable configuration
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY; 
+    
+    if (!apiKey) {
+      console.error("Missing VITE_GOOGLE_MAPS_API_KEY environment configuration.");
+      setMapError(true);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = 'google-maps-script';
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+    script.async = true;
+    script.defer = true;
+    
+    script.addEventListener('load', () => {
+      setIsSdkLoaded(true);
     });
 
-    // Create Routing Managers
-    directionsServiceRef.current = new window.google.maps.DirectionsService();
-    directionsRendererRef.current = new window.google.maps.DirectionsRenderer({
-      polylineOptions: {
-        strokeColor: "#58a6ff",
-        strokeWeight: 5,
-        strokeOpacity: 0.85
-      },
-      suppressMarkers: false
+    script.addEventListener('error', () => {
+      setMapError(true);
     });
-    directionsRendererRef.current.setMap(instance);
 
-    setMap(instance);
+    document.head.appendChild(script);
   }, []);
 
-  // Render Charging Station Markers
+  // 2. Initialize Map Canvas once SDK is confirmed loaded
   useEffect(() => {
-    if (!map) return;
+    if (!isSdkLoaded || !mapRef.current) return;
 
-    // Wipe any older existing pins
+    try {
+      const darkMapStyle = [
+        { elementType: "geometry", stylers: [{ color: "#21262d" }] },
+        { elementType: "labels.text.stroke", stylers: [{ color: "#21262d" }] },
+        { elementType: "labels.text.fill", stylers: [{ color: "#8b949e" }] },
+        { featureType: "road", elementType: "geometry", stylers: [{ color: "#30363d" }] },
+        { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#161b22" }] },
+        { featureType: "water", elementType: "geometry", stylers: [{ color: "#0d1117" }] }
+      ];
+
+      const instance = new window.google.maps.Map(mapRef.current, {
+        center: { lat: 28.6139, lng: 77.2090 },
+        zoom: 11,
+        styles: darkMapStyle,
+        disableDefaultUI: true,
+        zoomControl: true,
+      });
+
+      directionsServiceRef.current = new window.google.maps.DirectionsService();
+      directionsRendererRef.current = new window.google.maps.DirectionsRenderer({
+        polylineOptions: { strokeColor: "#58a6ff", strokeWeight: 5, strokeOpacity: 0.85 }
+      });
+      directionsRendererRef.current.setMap(instance);
+
+      setMap(instance);
+    } catch (err) {
+      console.error("Error initializing Google Maps layout:", err);
+      setMapError(true);
+    }
+  }, [isSdkLoaded]);
+
+  // 3. Render Custom Map Anchors/Markers
+  useEffect(() => {
+    if (!map || !isSdkLoaded) return;
+
     markersRef.current.forEach(m => m.setMap(null));
     markersRef.current = [];
 
@@ -93,39 +127,46 @@ export default function App() {
         }
       });
 
-      marker.addListener('click', () => {
-        handleStationSelect(station);
-      });
-
+      marker.addListener('click', () => handleStationSelect(station));
       markersRef.current.push(marker);
     });
-  }, [map, stations]);
+  }, [map, stations, isSdkLoaded]);
 
   const handleStationSelect = (station) => {
     setSelectedStation(station);
-    map.panTo({ lat: station.lat, lng: station.lng });
-    map.setZoom(14);
+    if (map) {
+      map.panTo({ lat: station.lat, lng: station.lng });
+      map.setZoom(14);
+    }
   };
 
-  // Turn-By-Turn Direction Request Engine (In-App Only)
+  // 4. In-App Direct Routing Engine
   const calculateInAppRoute = (station) => {
-    if (!directionsServiceRef.current || !directionsRendererRef.current) return;
+    if (!directionsServiceRef.current || !directionsRendererRef.current) {
+      alert("The routing system is still initializing. Please give it a brief moment.");
+      return;
+    }
 
-    // Use Geolocation or Fallback smoothly to center if location permissions block
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const originPoint = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
-        requestGoogleRoute(originPoint, station);
-      },
-      () => {
-        // Fallback simulated user position if geolocation is disabled in local browser
-        const simulatedUserPoint = { lat: 28.5939, lng: 77.2290 };
-        requestGoogleRoute(simulatedUserPoint, station);
-      }
-    );
+    const fallbackPoint = { lat: 28.5939, lng: 77.2290 }; // Central Delhi backup point
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const originPoint = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          };
+          requestGoogleRoute(originPoint, station);
+        },
+        (error) => {
+          console.warn("Location permission unavailable. Defaulting to system fallback view.", error);
+          requestGoogleRoute(fallbackPoint, station);
+        },
+        { timeout: 8000 }
+      );
+    } else {
+      requestGoogleRoute(fallbackPoint, station);
+    }
   };
 
   const requestGoogleRoute = (origin, station) => {
@@ -138,15 +179,13 @@ export default function App() {
       (response, status) => {
         if (status === window.google.maps.DirectionsStatus.OK) {
           directionsRendererRef.current.setDirections(response);
-          
-          // Capture calculated route meta details safely
           const leg = response.routes[0].legs[0];
           setRouteInfo({
             distance: leg.distance.text,
             duration: leg.duration.text
           });
         } else {
-          alert('Could not compute map navigation lines: ' + status);
+          alert('Route rendering mismatch: ' + status);
         }
       }
     );
@@ -155,21 +194,15 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: isMobile ? 'column-reverse' : 'row', height: '100vh', width: '100vw' }}>
       
-      {/* Dynamic Vertical Sidebar */}
-      <div className="sidebar" style={{ 
-        width: isMobile ? '100%' : '360px', 
-        height: isMobile ? '45vh' : '100%' 
-      }}>
-        
-        {/* Branding Container */}
+      {/* Sidebar UI */}
+      <div className="sidebar" style={{ width: isMobile ? '100%' : '360px', height: isMobile ? '45vh' : '100%' }}>
         <div style={{ padding: '20px 16px', borderBottom: '1px solid #30363d', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h1 className="branding-header">chargeapp.in</h1>
           <span style={{ fontSize: '0.75rem', color: '#8b949e', background: '#21262d', padding: '4px 8px', borderRadius: '12px', border: '1px solid #30363d' }}>
-            {stations.length} stations near you
+            {stations.length} stations
           </span>
         </div>
 
-        {/* Scrollable Cards Wrapper */}
         <div className="station-list-container">
           {stations.map((station, idx) => {
             const isActive = selectedStation?.id === station.id;
@@ -182,11 +215,10 @@ export default function App() {
               >
                 <h3 className="station-title">{station.name}</h3>
                 <p className="station-address">{station.address}</p>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
                   <span className={`badge ${isActive ? 'active' : ''}`}>{station.type}</span>
                 </div>
 
-                {/* Open Route inside application window */}
                 {isActive && (
                   <button 
                     className="nav-button"
@@ -203,19 +235,33 @@ export default function App() {
           })}
         </div>
 
-        {/* Live Route Navigation Readout Overlay */}
         {routeInfo && (
           <div className="route-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold' }}>
               <span>⏱️ ETA: <span style={{ color: '#58a6ff' }}>{routeInfo.duration}</span></span>
-              <span>📍 Distance: <span style={{ color: '#2ea44f' }}>{routeInfo.distance}</span></span>
+              <span>📍 Dist: <span style={{ color: '#2ea44f' }}>{routeInfo.distance}</span></span>
             </div>
           </div>
         )}
       </div>
 
-      {/* Main Map Box Engine */}
-      <div ref={mapRef} style={{ flex: 1, height: '100%', width: isMobile ? '100%' : 'auto' }} />
+      {/* Map Content Space */}
+      {mapError ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e', backgroundColor: '#0d1117', padding: '20px', textAlign: 'center' }}>
+          <div>
+            <h3>Map Layout Integration Halted</h3>
+            <p>Please confirm your domain settings inside the Google Cloud Console credentials parameters.</p>
+          </div>
+        </div>
+      ) : (
+        <div ref={mapRef} style={{ flex: 1, height: '100%', width: isMobile ? '100%' : 'auto', backgroundColor: '#0d1117' }}>
+          {!isSdkLoaded && (
+            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#58a6ff', fontSize: '1.1rem', fontWeight: '600' }}>
+              connecting to google maps...
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
